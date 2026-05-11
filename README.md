@@ -19,7 +19,7 @@ One-command script to deploy a hardened VPN server on a clean Ubuntu 20.04/22.04
 ## Usage
 
 ```bash
-bash <(curl -fsSL https://example.com/setup.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/prostosamiykrutoi/vps_setup/main/setup.sh)
 ```
 
 Or clone and run locally:
