@@ -142,6 +142,12 @@ MSG_EN[STEP8_OK]="telemt installed."
 MSG_RU[STEP8_OK]="telemt установлен."
 MSG_EN[STEP8_FAIL]="telemt installation failed."
 MSG_RU[STEP8_FAIL]="Не удалось установить telemt."
+MSG_EN[ALREADY_INSTALLED]="%s already installed, skipping reinstall."
+MSG_RU[ALREADY_INSTALLED]="%s уже установлен, переустановка не требуется."
+MSG_EN[UNREACHABLE_SKIP]="%s is unreachable, skipping."
+MSG_RU[UNREACHABLE_SKIP]="%s недоступен, пропускаем."
+MSG_EN[UNSUPPORTED_SKIP]="%s does not support required flags, skipping."
+MSG_RU[UNSUPPORTED_SKIP]="%s не поддерживает нужные флаги, пропускаем."
 
 # Summary
 MSG_EN[SUMMARY_TITLE]="INSTALLATION COMPLETE"
@@ -170,6 +176,12 @@ MSG_EN[SUMMARY_NO_TG]="Telegram proxy not configured (telemt installation failed
 MSG_RU[SUMMARY_NO_TG]="Telegram-прокси не настроен (ошибка установки telemt)."
 MSG_EN[SUMMARY_SAVED]="Credentials also saved to %s"
 MSG_RU[SUMMARY_SAVED]="Данные также сохранены в %s"
+MSG_EN[SUMMARY_SECURITY_TITLE]="SECURITY RECOMMENDATION"
+MSG_RU[SUMMARY_SECURITY_TITLE]="РЕКОМЕНДАЦИЯ ПО БЕЗОПАСНОСТИ"
+MSG_EN[SUMMARY_SECURITY_TEXT1]="Password login is still enabled on SSH."
+MSG_RU[SUMMARY_SECURITY_TEXT1]="Вход по паролю через SSH всё ещё включён."
+MSG_EN[SUMMARY_SECURITY_TEXT2]="Set up SSH key auth, then set 'PasswordAuthentication no'."
+MSG_RU[SUMMARY_SECURITY_TEXT2]="Настройте вход по SSH-ключу, затем установите 'PasswordAuthentication no'."
 
 # Generic
 MSG_EN[ERR_NOT_ROOT]="Error: this script must be run as root."
@@ -464,6 +476,9 @@ port     = ${SSH_PORT}
 maxretry = 5
 bantime  = 3600
 findtime = 600
+bantime.increment = true
+bantime.factor    = 2
+bantime.maxtime   = 604800
 EOF
 
     systemctl enable fail2ban >> "$LOG_FILE" 2>&1
@@ -552,6 +567,17 @@ step_7_1_ssl_cert() {
         return 1
     fi
 
+    # IP certificates (--ip-address / --preferred-profile) are an experimental
+    # Let's Encrypt feature; bail out fast instead of wasting a doomed attempt.
+    local cb_help
+    cb_help=$(certbot --help all 2>&1)
+    if ! grep -q -- '--ip-address' <<< "$cb_help" || ! grep -q -- '--preferred-profile' <<< "$cb_help"; then
+        log "WARN" "certbot does not support --ip-address/--preferred-profile flags"
+        warn "$(t UNSUPPORTED_SKIP "certbot")"
+        warn "$(t SSL_FAIL)"
+        return 1
+    fi
+
     certbot certonly \
         --preferred-profile shortlived \
         --standalone \
@@ -581,52 +607,68 @@ step_7_1_ssl_cert() {
 # STEP 7.2: INSTALL 3X-UI (NON-CRITICAL)
 # ─────────────────────────────────────────────────────────────────────────────
 
+_find_xui_cmd() {
+    local candidate
+    for candidate in x-ui /usr/local/x-ui/x-ui; do
+        if command -v "$candidate" &>/dev/null || [[ -x "$candidate" ]]; then
+            printf '%s' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
 step_7_2_install_3xui() {
     msg "$(t XUID_START)"
 
-    # Download installer to temp file
-    if ! curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh \
-         -o /tmp/3xui_install.sh >> "$LOG_FILE" 2>&1; then
-        warn "$(t XUID_FAIL)"
-        return 1
-    fi
-    chmod +x /tmp/3xui_install.sh
-
-    # Automate interactive installer with expect
-    if ! command -v expect &>/dev/null; then
-        apt-get install -y expect >> "$LOG_FILE" 2>&1 || true
-    fi
-
-    expect -c "
-        set timeout 300
-        log_file -a \"${LOG_FILE}\"
-        spawn bash /tmp/3xui_install.sh
-        expect {
-            -re {(Please choose|选择|choice|Enter.*:|\\[1\\])} {
-                send \"1\r\"
-                exp_continue
-            }
-            eof
-        }
-        catch wait result
-        exit [lindex \$result 3]
-    " >> "$LOG_FILE" 2>&1
-
-    local exit_code=$?
-    rm -f /tmp/3xui_install.sh
-
-    # x-ui command may be at various paths
     local xui_cmd=""
-    for candidate in x-ui /usr/local/x-ui/x-ui; do
-        if command -v "$candidate" &>/dev/null || [[ -x "$candidate" ]]; then
-            xui_cmd="$candidate"
-            break
+    if xui_cmd=$(_find_xui_cmd); then
+        msg "$(t ALREADY_INSTALLED "3x-ui")"
+    else
+        # Download installer to temp file
+        if ! curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh \
+             -o /tmp/3xui_install.sh >> "$LOG_FILE" 2>&1; then
+            warn "$(t XUID_FAIL)"
+            return 1
         fi
-    done
+        chmod +x /tmp/3xui_install.sh
 
-    if [[ -z "$xui_cmd" ]]; then
-        warn "$(t XUID_FAIL)"
-        return 1
+        # Automate interactive installer with expect
+        if ! command -v expect &>/dev/null; then
+            apt-get install -y expect >> "$LOG_FILE" 2>&1 || true
+        fi
+
+        # Generic catch-all: answer menu choices with "1", yes/no prompts with "y",
+        # and any other prompt by just pressing Enter (accept default), until eof.
+        expect -c "
+            set timeout 300
+            log_file -a \"${LOG_FILE}\"
+            spawn bash /tmp/3xui_install.sh
+            expect {
+                -re {(Please choose|选择|choice|\\[1\\])} {
+                    send \"1\r\"
+                    exp_continue
+                }
+                -re {\\(y/n\\)|\\(Y/n\\)|\\(y/N\\)|y/N} {
+                    send \"y\r\"
+                    exp_continue
+                }
+                -re {:\\s*\$} {
+                    send \"\r\"
+                    exp_continue
+                }
+                eof
+            }
+            catch wait result
+            exit [lindex \$result 3]
+        " >> "$LOG_FILE" 2>&1
+
+        rm -f /tmp/3xui_install.sh
+
+        if ! xui_cmd=$(_find_xui_cmd); then
+            warn "$(t XUID_FAIL)"
+            return 1
+        fi
     fi
 
     # Set credentials
@@ -638,6 +680,17 @@ step_7_2_install_3xui() {
 
     systemctl restart x-ui >> "$LOG_FILE" 2>&1 || true
     sleep 5
+
+    # Verify the service actually came up; one retry before giving up
+    if ! systemctl is-active --quiet x-ui; then
+        log "WARN" "x-ui not active after restart, retrying once"
+        systemctl restart x-ui >> "$LOG_FILE" 2>&1 || true
+        sleep 5
+        if ! systemctl is-active --quiet x-ui; then
+            warn "$(t XUID_FAIL)"
+            return 1
+        fi
+    fi
 
     msg "$(t XUID_OK)"
 }
@@ -828,34 +881,55 @@ step_7_4_create_inbound() {
 # STEP 8: TELEMT (NON-CRITICAL)
 # ─────────────────────────────────────────────────────────────────────────────
 
-step_8_telemt() {
-    msg "$(t STEP8_START)"
-
-    # TELEMT_PORT was gathered in step_0 for step mode; already in UFW from step_4
-
-    if ! curl -fsSL --max-time 60 \
-         https://raw.githubusercontent.com/telemt/telemt/main/install.sh \
-         | sh >> "$LOG_FILE" 2>&1; then
-        warn "$(t STEP8_FAIL)"
-        TELEMT_LINK=""
-        return 1
-    fi
-
-    # Locate config file
-    local config_file=""
+_find_telemt_config() {
+    local p config_file=""
     for p in /etc/telemt/config.toml \
               /opt/telemt/config.toml \
               /usr/local/etc/telemt/config.toml \
               "$HOME/.config/telemt/config.toml"; do
         if [[ -f "$p" ]]; then
-            config_file="$p"
-            break
+            printf '%s' "$p"
+            return 0
         fi
     done
+    config_file=$(find /etc /opt /usr/local -name "config.toml" \
+        -path "*/telemt/*" 2>/dev/null | head -1)
+    if [[ -n "$config_file" ]]; then
+        printf '%s' "$config_file"
+        return 0
+    fi
+    return 1
+}
 
-    if [[ -z "$config_file" ]]; then
-        config_file=$(find /etc /opt /usr/local -name "config.toml" \
-            -path "*/telemt/*" 2>/dev/null | head -1)
+step_8_telemt() {
+    msg "$(t STEP8_START)"
+
+    # TELEMT_PORT was gathered in step_0 for step mode; already in UFW from step_4
+
+    local install_url="https://raw.githubusercontent.com/telemt/telemt/main/install.sh"
+    local config_file=""
+
+    if config_file=$(_find_telemt_config); then
+        msg "$(t ALREADY_INSTALLED "telemt")"
+    else
+        if ! curl -fsSL --head --max-time 10 "$install_url" >> "$LOG_FILE" 2>&1; then
+            log "WARN" "telemt install script unreachable: $install_url"
+            warn "$(t UNREACHABLE_SKIP "telemt")"
+            TELEMT_LINK=""
+            return 1
+        fi
+
+        if ! curl -fsSL --max-time 60 "$install_url" | sh >> "$LOG_FILE" 2>&1; then
+            warn "$(t STEP8_FAIL)"
+            TELEMT_LINK=""
+            return 1
+        fi
+
+        if ! config_file=$(_find_telemt_config); then
+            log "WARN" "telemt config not found after install"
+            TELEMT_LINK=""
+            return 1
+        fi
     fi
 
     if [[ -z "$config_file" ]]; then
@@ -938,6 +1012,11 @@ print_summary() {
     else
         out+=$(printf '║  %-48s  ║\n' "$(t SUMMARY_NO_SSL)")
     fi
+
+    out+=$(printf '║  %-48s  ║\n' "")
+    out+=$(printf '║  %-48s  ║\n' "$(t SUMMARY_SECURITY_TITLE)")
+    out+=$(printf '║  %-48s  ║\n' "$(t SUMMARY_SECURITY_TEXT1)")
+    out+=$(printf '║  %-48s  ║\n' "$(t SUMMARY_SECURITY_TEXT2)")
 
     out+=$(printf '╚%s╝\n' "$hr")
     out+=$(printf '  %s\n' "$(t SUMMARY_SAVED "$CREDS_FILE")")
