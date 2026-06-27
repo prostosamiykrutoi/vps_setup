@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shroud"
+version = "0.2.0"
+description = "Orchestrator for deploying anti-censorship proxy nodes on a clean Ubuntu VPS"
+requires-python = ">=3.10"
+dependencies = [
+    "PyYAML>=6.0",
+    "Jinja2>=3.1",
+    "jsonschema>=4.0",
+    "cryptography>=41.0",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7.0"]
+
+[project.scripts]
+shroud = "shroud.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["shroud*"]
+
+[tool.setuptools.package-data]
+shroud = ["render/**/*", "i18n/**/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

@@ -1,0 +1,86 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "shroud profile",
+  "type": "object",
+  "required": ["version", "images", "protocols", "panel", "decoy"],
+  "additionalProperties": true,
+  "properties": {
+    "version": { "type": "string" },
+    "meta": { "type": "object" },
+    "images": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "required": ["repo", "tag"],
+        "properties": {
+          "repo": { "type": "string", "minLength": 1 },
+          "tag": { "type": "string", "minLength": 1 },
+          "digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "protocols": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "enabled", "type"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "enabled": { "type": "boolean" },
+          "type": {
+            "type": "string",
+            "enum": ["vless", "hysteria2", "telemt"]
+          },
+          "security": { "type": "string" },
+          "transport": { "type": "string" },
+          "flow": { "type": "string" },
+          "fingerprint": { "type": "string" },
+          "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+          "network_proto": { "type": "string", "enum": ["tcp", "udp"] },
+          "sni_strategy": {
+            "type": "string",
+            "enum": ["same-asn-scan", "static"]
+          },
+          "sni_fallback": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "behavioral": { "type": "object" },
+          "masquerade": { "type": "object" },
+          "fake_tls_domain": { "type": "string" },
+          "probe_resistant": { "type": "boolean" },
+          "unknown_sni_action": {
+            "type": "string",
+            "enum": ["reject_handshake", "mask", "drop", "accept"]
+          },
+          "cdn": { "type": "string" }
+        },
+        "additionalProperties": true
+      }
+    },
+    "decoy": {
+      "type": "object",
+      "required": ["mode"],
+      "properties": {
+        "mode": { "type": "string", "enum": ["real-site", "static"] },
+        "upstream": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "panel": {
+      "type": "object",
+      "required": ["bind", "access"],
+      "properties": {
+        "bind": { "type": "string" },
+        "access": { "type": "string", "enum": ["ssh-forward", "public"] }
+      },
+      "additionalProperties": true
+    }
+  }
+}

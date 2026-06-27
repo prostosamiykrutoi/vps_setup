@@ -1,0 +1,26 @@
+# Rendered by shroud — nginx decoy / reverse proxy.
+# A direct HTTP(S) request to the server IP must look like a plausible real
+# site, never a default "It works!" page (spec §9.4).
+server {
+    listen 8080 default_server;
+    listen [::]:8080 default_server;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Don't advertise nginx version.
+    server_tokens off;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # Health endpoint for Docker healthcheck (loopback only).
+    location = /healthz {
+        allow 127.0.0.1;
+        deny all;
+        access_log off;
+        return 200 "ok\n";
+    }
+}

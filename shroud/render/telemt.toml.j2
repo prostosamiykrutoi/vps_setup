@@ -1,0 +1,21 @@
+# Rendered by shroud — telemt (MTProto, probe-resistant). Do not edit by hand;
+# change the profile and run `shroud update`.
+[general.modes]
+tls = true
+
+[server]
+port = {{ port }}
+
+[censorship]
+tls_domain = "{{ fake_tls_domain }}"
+mask = true
+tls_emulation = true
+mask_host = "{{ fake_tls_domain }}"
+mask_port = 443
+# On a probe without a valid secret, behave exactly like a stock web server
+# refusing an unknown SNI (RFC 6066 unrecognized_name), OR transparently front
+# the real donor site. Driven by the profile.
+unknown_sni_action = "{{ unknown_sni_action }}"
+
+[access.users]
+{{ user }} = "{{ secret }}"

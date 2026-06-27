@@ -1,0 +1,100 @@
+# shroud default profile — the VOLATILE layer.
+#
+# Everything here changes upstream frequently. It is intentionally separate from
+# the orchestrator code. To move to a newer "current best", bump this file (or
+# ship a new pinned release) and run `shroud update` — do NOT edit the code.
+#
+# Versions below were verified against upstream on 2026-06-27. Digests should be
+# confirmed at pull time (`docker inspect`) and added where missing.
+version: v1
+meta:
+  verified_on: "2026-06-27"
+  notes: >
+    Component versions/config syntax verified from upstream source. Re-verify on
+    each profile bump; protocols that work today may be fingerprinted tomorrow.
+
+images:
+  # 3x-ui: GHCR only (no Docker Hub image exists). digest verified via GHCR API.
+  xray_3xui:
+    repo: ghcr.io/mhsanaei/3x-ui
+    tag: v3.4.1
+    digest: sha256:9a236414c69be419421902a99f6501f6ea394b640aeb3820f8d1936375655678
+  # hysteria2: official image is tobyxdd/hysteria on Docker Hub.
+  hysteria2:
+    repo: tobyxdd/hysteria
+    tag: v2.9.3
+  # telemt: GHCR. Upstream ships :latest; pin a digest once confirmed at pull.
+  telemt:
+    repo: ghcr.io/telemt/telemt
+    tag: latest
+  nginx:
+    repo: nginx
+    tag: 1.27-alpine
+
+protocols:
+  # --- primary: VLESS + Reality + XHTTP -------------------------------------
+  # CRITICAL (verified upstream): with XHTTP transport the `flow` MUST be empty.
+  # xtls-rprx-vision is valid ONLY on RAW/TCP (Vision), never on xhttp.
+  - id: vless-reality-xhttp
+    enabled: true
+    type: vless
+    security: reality
+    transport: xhttp          # Xray network name (legacy alias: splithttp)
+    flow: ""                  # MUST stay empty for xhttp+reality
+    fingerprint: chrome
+    port: 443
+    network_proto: tcp
+    xhttp_mode: auto          # auto|packet-up|stream-up|stream-one
+    xhttp_path: /             # operator-tunable
+    sni_strategy: same-asn-scan   # RealiTLScanner over the server's own subnet
+    # Last-resort donors ONLY if same-ASN scan finds nothing. NEVER microsoft.com.
+    # A same-ASN donor (found by the scanner) is strongly preferred over these.
+    sni_fallback:
+      - dl.google.com
+      - www.amazon.com
+    behavioral:
+      padding: true           # xPaddingBytes via xhttp
+      xmux: true
+
+  # --- hysteria2 (QUIC) ------------------------------------------------------
+  - id: hysteria2
+    enabled: true
+    type: hysteria2
+    port: 8443
+    network_proto: udp
+    masquerade:
+      type: proxy
+      url: https://news.ycombinator.com   # real site reverse-proxied on probe
+
+  # --- telemt (MTProto, probe-resistant) ------------------------------------
+  - id: telemt-mtproto
+    enabled: true
+    type: telemt
+    port: 8443                # TCP; distinct from hysteria's UDP/8443
+    network_proto: tcp
+    # NOT the upstream doc default (petrovich.ru) — a shared domain is a marker.
+    # Operator should set a same-region TLS1.3 donor in interactive mode.
+    fake_tls_domain: dl.google.com
+    probe_resistant: true
+    # reject_handshake => on a secret-less probe, behave like nginx refusing an
+    # unknown SNI (RFC 6066). Use "mask" to instead front the real donor site.
+    unknown_sni_action: reject_handshake
+
+  # --- optional: VLESS + WS + CDN (needs a domain; off by default) ----------
+  - id: vless-ws-cdn
+    enabled: false
+    type: vless
+    transport: ws
+    port: 443
+    cdn: cloudflare
+
+decoy:
+  mode: real-site
+  upstream: https://news.ycombinator.com
+
+panel:
+  bind: 127.0.0.1            # D1: panel never faces the internet
+  access: ssh-forward
+  port: 2053
+  sub_port: 2096
+  sub_path: /sub/

@@ -1,0 +1,18 @@
+# Rendered by shroud — hysteria2 (QUIC). Change the profile, then `shroud update`.
+listen: ":{{ port }}"
+
+tls:
+  cert: /certs/fullchain.pem
+  key: /certs/privkey.pem
+
+auth:
+  type: password
+  password: "{{ auth }}"
+
+masquerade:
+  type: proxy
+  proxy:
+    url: "{{ masquerade_url }}"
+    rewriteHost: true
+  # Without a valid auth, hysteria2 reverse-proxies the masquerade site, so a
+  # probe sees a real website rather than a proxy fingerprint.

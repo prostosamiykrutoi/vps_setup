@@ -1,0 +1,10 @@
+[Unit]
+Description=shroud periodic self-test (re-runs Phase 6 verification)
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Adjust the path if shroud was installed elsewhere.
+ExecStart=/opt/shroud/.venv/bin/shroud verify --role standalone
+Nice=10
