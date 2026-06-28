@@ -52,6 +52,18 @@ def render_ruleset(ctx: "Context") -> str:
     if ports["udp"]:
         udp = ", ".join(str(p) for p in sorted(ports["udp"]))
         udp_block = f"        udp dport {{ {udp} }} accept\n"
+    # IMPORTANT — Docker compatibility:
+    # We deliberately DO NOT create a `forward` base chain. Docker publishes
+    # container ports by DNAT'ing inbound traffic and routing it through the
+    # FORWARD hook (the packets are forwarded to the container, NOT delivered to
+    # the host INPUT chain). A parallel `forward policy drop` here would silently
+    # drop every new external connection to a published port (443/8443/2096/80) —
+    # which is exactly what broke connectivity on the first real-VPS run. Docker
+    # owns the forward hook (and exposes DOCKER-USER for custom forward filtering);
+    # we restrict only the HOST's own INPUT, which is what "default deny incoming"
+    # means for host services (sshd, etc.). The INPUT port-accepts below also
+    # cover the `userland-proxy=on` case, where docker-proxy listens on the host
+    # and published-port traffic does hit INPUT.
     return f"""#!/usr/sbin/nft -f
 # Managed by shroud. Do not edit; change the profile and run `shroud update`.
 table inet shroud {{
@@ -69,10 +81,6 @@ table inet shroud {{
 
         tcp dport {{ {tcp} }} accept
 {udp_block}    }}
-    chain forward {{
-        type filter hook forward priority 0; policy drop;
-        ct state established,related accept
-    }}
     chain output {{
         type filter hook output priority 0; policy accept;
     }}

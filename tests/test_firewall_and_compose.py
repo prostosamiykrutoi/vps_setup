@@ -31,6 +31,18 @@ def test_firewall_ruleset_drops_icmp_echo(ctx):
     assert "ct state established,related accept" in rules
 
 
+def test_firewall_has_no_forward_chain(ctx):
+    # A default-deny FORWARD chain blocks Docker-published container ports
+    # (they traverse the forward hook). Docker must own forwarding.
+    rules = p2_firewall.render_ruleset(ctx)
+    assert "hook forward" not in rules
+    assert "chain forward" not in rules
+    # INPUT must still default-deny the host and open the published ports so the
+    # userland-proxy path (traffic hitting INPUT) also works.
+    assert "hook input" in rules
+    assert "443" in rules and "8443" in rules
+
+
 def test_compose_renders_all_services(ctx, monkeypatch):
     monkeypatch.setattr(reality, "generate_keypair", lambda c: ("PRIV", "PUB"))
     comps = p4_stack.build_components(ctx)
