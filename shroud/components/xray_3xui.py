@@ -147,11 +147,13 @@ class Xray3xuiComponent(Component):
             ["docker", "exec", "shroud-3xui", "x-ui", "setting",
              "-webBasePath", "/"], timeout=60)
         ctx.runner.run(["docker", "restart", "shroud-3xui"], timeout=60)
+        time.sleep(5)  # let the panel re-read settings and bind before we probe
 
         # 2. Discover the ACTUAL port + base path the panel ended up with, rather
         # than assuming. This is what fixes the 403-on-/login failure.
         port, base = self._read_panel_settings(panel_port)
         self._panel_base_path = base
+        ctx.log.info("3xui.discovered", port=port, base_path=base or "/")
         self._wait_panel(port, base)
 
         api = _PanelAPI(f"http://127.0.0.1:{port}{base}", ctx)
@@ -261,26 +263,65 @@ class _PanelAPI:
         self.opener = urllib.request.build_opener(
             urllib.request.HTTPCookieProcessor(self.cj))
 
+    def _common_headers(self) -> dict:
+        # Many gin-based panels enforce a CSRF/Referer check on POSTs; send a
+        # matching Origin/Referer plus a browser UA so the request looks like it
+        # came from the panel's own login page.
+        origin = self.base or "http://127.0.0.1"
+        return {
+            "User-Agent": _UA,
+            "Origin": origin,
+            "Referer": origin + "/",
+            "X-Requested-With": "XMLHttpRequest",
+        }
+
+    def _seed_cookies(self) -> None:
+        """GET the panel root once to obtain the session/CSRF cookie."""
+        req = urllib.request.Request(self.base + "/", method="GET",
+                                     headers=self._common_headers())
+        try:
+            with self.opener.open(req, timeout=15):
+                pass
+        except urllib.error.HTTPError:
+            pass  # even a 4xx sets cookies
+        except (urllib.error.URLError, OSError):
+            pass
+
     def _post(self, path: str, data: dict, as_json: bool = False) -> dict | None:
         url = self.base + path
+        headers = self._common_headers()
         if as_json:
             body = json.dumps(data).encode()
-            headers = {"Content-Type": "application/json"}
+            headers["Content-Type"] = "application/json"
         else:
             body = urllib.parse.urlencode(data).encode()
-            headers = {"Content-Type": "application/x-www-form-urlencoded"}
-        headers["User-Agent"] = _UA
+            headers["Content-Type"] = "application/x-www-form-urlencoded"
         req = urllib.request.Request(url, data=body, headers=headers, method="POST")
         try:
             with self.opener.open(req, timeout=20) as resp:
                 return json.loads(resp.read().decode() or "{}")
+        except urllib.error.HTTPError as exc:
+            snippet = ""
+            try:
+                snippet = exc.read().decode("utf-8", "replace")[:200]
+            except Exception:
+                pass
+            self.ctx.log.warn("3xui.api_http", path=path, code=exc.code,
+                              body=snippet)
+            return None
         except (urllib.error.URLError, json.JSONDecodeError, OSError) as exc:
             self.ctx.log.warn("3xui.api_error", path=path, error=str(exc))
             return None
 
     def login(self, user: str, pwd: str) -> bool:
+        self._seed_cookies()
         r = self._post("/login", {"username": user, "password": pwd})
-        return bool(r and r.get("success"))
+        if r is None:
+            return False
+        if not r.get("success"):
+            self.ctx.log.warn("3xui.login_rejected", msg=str(r.get("msg"))[:120])
+            return False
+        return True
 
     def inbound_exists(self, remark: str) -> bool:
         url = self.base + "/panel/api/inbounds/list"

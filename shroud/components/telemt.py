@@ -68,6 +68,8 @@ class TelemtComponent(Component):
             "cap_drop": ["ALL"],
             "cap_add": ["NET_BIND_SERVICE"],
             "read_only": True,
+            # Quiet the per-connection Telegram DC handshake spam in logs.
+            "environment": ["RUST_LOG=error"],
         }
         return "telemt", svc
 
