@@ -51,7 +51,11 @@ class TelemtComponent(Component):
         )
         cfg = cfg_dir / "config.toml"
         cfg.write_text(text, "utf-8")
-        cfg.chmod(0o600)
+        # telemt runs non-root (distroless) with cap_drop ALL, so the config must
+        # be world-readable for the container user to read it. The secret inside
+        # is still protected by the root-owned runtime dir; the canonical secret
+        # store remains /root/shroud-credentials.txt (0600).
+        cfg.chmod(0o644)
 
     def compose_service(self) -> tuple[str, dict]:
         svc = {

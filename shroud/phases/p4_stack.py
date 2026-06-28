@@ -44,6 +44,12 @@ def render_compose(ctx: "Context", components: list) -> dict:
 def _write_stack(ctx: "Context", components: list) -> Path:
     rt = paths.runtime_dir()
     rt.mkdir(parents=True, exist_ok=True)
+    # Root-only dir: component configs inside carry secrets and some must be
+    # world-readable for non-root containers, so the dir itself gates host access.
+    try:
+        rt.chmod(0o700)
+    except OSError:
+        pass
     for comp in components:
         comp.render(rt)
     compose = render_compose(ctx, components)

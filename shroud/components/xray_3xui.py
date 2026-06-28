@@ -123,11 +123,16 @@ class Xray3xuiComponent(Component):
         panel = ctx.profile.panel
         panel_port = int(panel.get("port", 2053))
 
-        # 1. Set panel credentials + bind to loopback via the in-container CLI.
+        # 1. Set panel credentials via the in-container CLI.
+        # NOTE: do NOT set -listenIP 127.0.0.1 here. Inside the container that
+        # would bind the panel to the container's loopback, which Docker's port
+        # publish (DNAT to the container's eth0) can't reach. Loopback-only
+        # exposure (D1) is enforced at the HOST level by publishing the port as
+        # 127.0.0.1:2053:2053 in compose; the panel binds 0.0.0.0 in-container.
         ctx.runner.run(
             ["docker", "exec", "shroud-3xui", "x-ui", "setting",
              "-username", self._panel_user, "-password", self._panel_pass,
-             "-port", str(panel_port), "-listenIP", "127.0.0.1"],
+             "-port", str(panel_port)],
             timeout=60,
         )
         ctx.runner.run(["docker", "restart", "shroud-3xui"], timeout=60)

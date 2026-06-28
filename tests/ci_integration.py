@@ -52,8 +52,10 @@ def main() -> int:
         p0_preflight.run(ctx)
     except Exception as exc:           # OS gate etc. — log, keep going in CI
         print(f"[preflight] {exc}")
-    if not ctx.facts.public_ip4:
-        ctx.facts.public_ip4 = "127.0.0.1"
+    # In CI the runner's public IP is not hairpinned back to itself, so the
+    # handshake/decoy self-tests must target loopback to exercise the real local
+    # stack (published ports bind 0.0.0.0, reachable via 127.0.0.1).
+    ctx.facts.public_ip4 = "127.0.0.1"
     print(f"[ci] ip={ctx.facts.public_ip4} arch={ctx.facts.arch}")
 
     engine = Engine(ctx)
