@@ -12,6 +12,7 @@ def test_firewall_ports_exclude_panel(ctx):
     assert 8443 in ports["tcp"]         # telemt tcp
     assert 8443 in ports["udp"]         # hysteria udp
     assert 2096 in ports["tcp"]         # subscription
+    assert 80 in ports["tcp"]           # nginx decoy
     assert 22 in ports["tcp"]           # ssh
     assert 2053 not in ports["tcp"]     # panel loopback only
 

@@ -31,6 +31,7 @@ def desired_ports(ctx: "Context") -> dict[str, set[int]]:
     panel = ctx.profile.panel if ctx.profile else {}
     sub_port = int(panel.get("sub_port", 2096))
     tcp.add(sub_port)
+    tcp.add(80)  # nginx decoy / ACME http-01
 
     for proto in ctx.enabled_protocols():
         port = int(proto.get("port", 0))

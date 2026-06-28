@@ -47,7 +47,9 @@ class NginxDecoyComponent(Component):
                 "./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro",
                 "./nginx/html:/usr/share/nginx/html:ro",
             ],
-            "expose": ["8080"],
+            # Published on :80 so a direct HTTP probe to the IP sees a plausible
+            # real site, never a default page (spec §9.4 / acceptance #5).
+            "ports": ["80:8080"],
             "healthcheck": {
                 "test": ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"],
                 "interval": "30s",
@@ -58,4 +60,4 @@ class NginxDecoyComponent(Component):
         return "nginx", svc
 
     def firewall_ports(self) -> list[tuple[int, str]]:
-        return []  # not directly exposed; fronted by other listeners
+        return [(80, "tcp")]  # decoy site on :80
