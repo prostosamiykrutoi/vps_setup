@@ -140,8 +140,9 @@ class StackStep(Step):
         ip = ctx.facts.public_ip4 or "SERVER_IP"
         sub_port = panel.get("sub_port", 2096)
         sub_path = panel.get("sub_path", "/sub/")
-        sub_id = ctx.state.get_ref("vless_uuid", "")[:8] if ctx.state.get_ref("vless_uuid") else ""
-        ctx.summary["subscription"] = f"http://{ip}:{sub_port}{sub_path}{sub_id}"
+        sub_id = ctx.state.get_ref("reality_sub_id", "")
+        if sub_id:
+            ctx.summary["subscription"] = f"http://{ip}:{sub_port}{sub_path}{sub_id}"
 
 
 def steps(ctx: "Context") -> list[Step]:

@@ -5,23 +5,38 @@ donor in the same CIDR (co-location => no instant giveaway). Fall back to a
 same-ASN/last-resort donor from the profile — never ``www.microsoft.com``.
 
 RealiTLScanner CLI (verified): ``-addr`` accepts a CIDR, ``-port`` (def 443),
-``-thread``, ``-out`` CSV with columns IP,ORIGIN,CERT_DOMAIN,CERT_ISSUER,GEO_CODE.
+``-thread``, ``-out`` CSV. Column order has varied across releases, so we never
+trust a fixed index: we scan every cell of every row and pick the first value
+that is a *syntactically valid domain* (rejects junk like ``TLS 1.3``).
 Assets: ``RealiTLScanner-linux-amd64`` / ``-linux-arm64``.
 """
 from __future__ import annotations
 
 import ipaddress
-import json
+import re
 import tempfile
 import urllib.request
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+from .. import paths
 
 if TYPE_CHECKING:
     from ..context import Context
 
 _REPO = "XTLS/RealiTLScanner"
 _PINNED_TAG = "v0.2.3"
+
+# A valid hostname: labels of [a-z0-9-], a real alphabetic TLD (>=2). This
+# rejects "TLS 1.3" (space + numeric TLD), IPs, and other non-domain cells.
+_DOMAIN_RE = re.compile(
+    r"^(?=.{1,253}$)(?!-)([a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+"
+    r"[a-zA-Z]{2,63}$")
+
+
+def is_valid_domain(s: str) -> bool:
+    s = (s or "").strip().lstrip("*.")
+    return bool(_DOMAIN_RE.match(s)) and "microsoft.com" not in s
 
 
 def _asset_for_arch(arch: str) -> str:
@@ -38,13 +53,14 @@ def _server_cidr(ip: str, bits: int = 24) -> str | None:
 
 
 def select_donor(ctx: "Context") -> str:
-    """Return a donor SNI: same-ASN scan result, else profile fallback."""
+    """Return a donor SNI: same-ASN scan result, else a validated fallback."""
     proto = ctx.profile.protocol("vless-reality-xhttp") or {}
-    fallbacks = [d for d in proto.get("sni_fallback", []) if "microsoft.com" not in d]
+    fallbacks = [d for d in proto.get("sni_fallback", []) if is_valid_domain(d)]
     fallback = fallbacks[0] if fallbacks else "dl.google.com"
 
     if proto.get("sni_strategy") != "same-asn-scan":
-        return proto.get("static_sni", fallback)
+        static = proto.get("static_sni", fallback)
+        return static if is_valid_domain(static) else fallback
 
     ctx.log.info("sni", msg=ctx.t("sni.scanning"))
     ip = ctx.facts.public_ip4
@@ -59,7 +75,7 @@ def select_donor(ctx: "Context") -> str:
         return fallback
 
     donor = _run_scan(ctx, binary, cidr)
-    if donor:
+    if donor and is_valid_domain(donor):
         ctx.log.info("sni", msg=ctx.t("sni.found", donor))
         return donor
 
@@ -83,23 +99,29 @@ def _download_scanner(ctx: "Context") -> Path | None:
 
 
 def _run_scan(ctx: "Context", binary: Path, cidr: str) -> str | None:
-    out = Path(tempfile.gettempdir()) / "shroud_donors.csv"
-    res = ctx.runner.run(
+    # Keep the CSV under /var/log/shroud so the operator can inspect what the
+    # scanner actually found (`cat /var/log/shroud/reality_scan.csv`).
+    out = paths.log_dir() / "reality_scan.csv"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    ctx.runner.run(
         [str(binary), "-addr", cidr, "-port", "443", "-thread", "10",
          "-timeout", "8", "-out", str(out)],
         mutating=False, timeout=180,
     )
     if not out.exists():
+        ctx.log.warn("sni.scan_no_output", path=str(out))
         return None
     try:
         lines = out.read_text("utf-8").strip().splitlines()
     except OSError:
         return None
-    # CSV: IP,ORIGIN,CERT_DOMAIN,CERT_ISSUER,GEO_CODE. Pick first apex-ish domain.
-    for line in lines[1:]:
-        cols = [c.strip() for c in line.split(",")]
-        if len(cols) >= 3 and cols[2] and "." in cols[2]:
-            cert_domain = cols[2].lstrip("*.")
-            if "microsoft.com" not in cert_domain:
-                return cert_domain
+    # Scan EVERY cell of EVERY row; the first valid domain wins, regardless of
+    # which column the current scanner build puts it in.
+    for line in lines:
+        for cell in line.split(","):
+            cand = cell.strip().lstrip("*.")
+            if is_valid_domain(cand):
+                ctx.log.info("sni.candidate", domain=cand)
+                return cand
+    ctx.log.warn("sni.scan_no_domain", rows=len(lines))
     return None

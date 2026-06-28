@@ -70,6 +70,18 @@ def test_registry_builds_enabled(ctx):
     assert {"vless", "hysteria2", "telemt"}.issubset(types)
 
 
+def test_sni_validator_rejects_junk():
+    from shroud.components import sni
+    # The real-VPS bug: "TLS 1.3" was accepted as a donor SNI. It must not be.
+    assert not sni.is_valid_domain("TLS 1.3")
+    assert not sni.is_valid_domain("1.2.3.4")          # an IP is not a donor
+    assert not sni.is_valid_domain("")
+    assert not sni.is_valid_domain("www.microsoft.com")  # forbidden donor
+    assert sni.is_valid_domain("dl.google.com")
+    assert sni.is_valid_domain("*.fastly.net")          # wildcard cert -> apex
+    assert sni.is_valid_domain("a.b.c.example.co.uk")
+
+
 def test_panel_settings_parse_random_base_path(ctx, monkeypatch):
     # The CI failure was a 403 because 3x-ui generated a random webBasePath and
     # we hit /login. _read_panel_settings must recover the real port + base path.

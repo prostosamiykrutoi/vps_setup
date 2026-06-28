@@ -75,8 +75,20 @@ class Xray3xuiComponent(Component):
             st.set_ref("reality_short_id", sid)
         self._short_id = sid
 
-        # Donor SNI (same-ASN scan, else fallback). Cache in state.
-        self._sni = st.get_ref("reality_sni") or sni.select_donor(ctx)
+        # Subscription id (per-client; ties the client to its /sub/<id> link).
+        sub_id = st.get_ref("reality_sub_id")
+        if not sub_id:
+            sub_id = secrets_util.gen_hex(8)
+            st.set_ref("reality_sub_id", sub_id)
+        self._sub_id = sub_id
+
+        # Donor SNI (same-ASN scan, else fallback). Re-validate any cached value
+        # so a previously-stored bad SNI (e.g. an old "TLS 1.3") gets replaced.
+        cached = st.get_ref("reality_sni")
+        if cached and sni.is_valid_domain(cached):
+            self._sni = cached
+        else:
+            self._sni = sni.select_donor(ctx)
         st.set_ref("reality_sni", self._sni)
 
     # ----- config / compose --------------------------------------------------
@@ -126,25 +138,42 @@ class Xray3xuiComponent(Component):
             return
         panel = ctx.profile.panel
         panel_port = int(panel.get("port", 2053))
+        db = self._db_path()
 
-        # 1. Set panel credentials via the in-container CLI so the operator can
-        # log into the UI. NOTE: do NOT set -listenIP 127.0.0.1 here — inside the
-        # container that binds the panel to the container's loopback, which
-        # Docker's port publish (DNAT to the container's eth0) can't reach.
-        # Loopback-only exposure (D1) is enforced at the HOST via publishing the
-        # port as 127.0.0.1:2053:2053; the panel binds 0.0.0.0 in-container.
+        # 1. Wait for the panel's FIRST boot to finish (it creates + migrates the
+        # SQLite DB and the default admin). Setting credentials before this races
+        # the migration and the new password silently doesn't stick — which is
+        # exactly why the panel rejected the password on the first real-VPS run.
+        for _ in range(30):
+            if db.exists():
+                break
+            time.sleep(1.5)
+        self._wait_panel(panel_port, "")
+        time.sleep(2)
+
+        # 2. NOW set panel credentials (after init they persist). Do NOT set
+        # -listenIP 127.0.0.1 — inside the container that binds the panel to the
+        # container's loopback, which Docker's port publish (DNAT to eth0) can't
+        # reach. Loopback-only exposure (D1) is enforced at the HOST by
+        # publishing 127.0.0.1:2053:2053; the panel binds 0.0.0.0 in-container.
         ctx.runner.run(
             ["docker", "exec", "shroud-3xui", "x-ui", "setting",
              "-username", self._panel_user, "-password", self._panel_pass,
              "-port", str(panel_port)],
             timeout=60,
         )
+        # Defensive: clear any 2FA the fresh panel may have toggled on, so login
+        # with just user+password works (best-effort; flag may be absent).
+        ctx.runner.run(
+            ["docker", "exec", "shroud-3xui", "x-ui", "setting",
+             "-resetTwoFactor", "true"], timeout=30)
 
-        # 2. Create the VLESS-Reality inbound by writing 3x-ui's SQLite DB
+        # 3. Create the VLESS-Reality inbound by writing 3x-ui's SQLite DB
         # directly. The panel's HTTP API guards POST /login with a CSRF/login
         # flow that hard-returns 403 to scripted requests (verified in CI); the
         # DB is the deterministic, version-robust path. We adapt to the real
-        # table columns via PRAGMA so a schema change doesn't break us.
+        # table columns via PRAGMA so a schema change doesn't break us. The
+        # stop/start also reloads the panel so the new credentials take effect.
         self._provision_inbound_via_db()
 
     def _db_path(self):
@@ -160,16 +189,15 @@ class Xray3xuiComponent(Component):
         if not db.exists():
             ctx.log.warn("3xui.db_missing", path=str(db))
             return
-        if self._inbound_in_db(db):
-            ctx.log.info("3xui.inbound_exists")
-            return
-        # Stop the panel to write its DB safely, insert, then start so xray
-        # regenerates its config with the new inbound.
+        already = self._inbound_in_db(db)
+        # Stop the panel to write its DB safely, insert if missing, then start so
+        # xray regenerates its config with the inbound AND the panel reloads the
+        # credentials set just before this.
         ctx.runner.run(["docker", "stop", "shroud-3xui"], timeout=60)
-        inserted = self._insert_inbound_db(db)
+        inserted = False if already else self._insert_inbound_db(db)
         ctx.runner.run(["docker", "start", "shroud-3xui"], timeout=60)
         time.sleep(5)
-        ctx.log.info("3xui.inbound_db", inserted=inserted)
+        ctx.log.info("3xui.inbound_db", inserted=inserted, already=already)
 
     def _inbound_in_db(self, db) -> bool:
         import sqlite3
@@ -258,8 +286,14 @@ class Xray3xuiComponent(Component):
             "clients": [{
                 "id": self._uuid,
                 "flow": "",                      # MUST be empty for xhttp+reality
-                "email": "shroud",
+                "email": f"shroud-{self._uuid[:8]}",   # 3x-ui requires unique email
+                "limitIp": 0,
+                "totalGB": 0,
+                "expiryTime": 0,
                 "enable": True,
+                "tgId": "",
+                "subId": self._sub_id,           # enables the subscription link
+                "reset": 0,
             }],
             "decryption": "none",
             "fallbacks": [],

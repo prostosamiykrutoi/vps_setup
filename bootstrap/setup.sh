@@ -40,12 +40,27 @@ ensure_pkg() {
     dpkg -s "$p" >/dev/null 2>&1 || MISSING+=("$p")
   done
 }
+# On a freshly-booted VPS, cloud-init / unattended-upgrades often hold the apt
+# lock. Wait for it (up to ~3 min) instead of failing the whole install.
+wait_for_apt() {
+  local tries=0
+  while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 \
+     || fuser /var/lib/apt/lists/lock >/dev/null 2>&1 \
+     || fuser /var/lib/dpkg/lock >/dev/null 2>&1; do
+    tries=$((tries + 1))
+    [ "$tries" -gt 36 ] && { log "WARNING: apt still locked after ~3min; proceeding"; break; }
+    log "apt is locked by another process; waiting... (${tries}/36)"
+    sleep 5
+  done
+}
+apt_get() { wait_for_apt; DEBIAN_FRONTEND=noninteractive apt-get "$@"; }
+
 MISSING=()
 ensure_pkg python3 python3-venv python3-pip git curl jq openssl ca-certificates
 if [ "${#MISSING[@]}" -gt 0 ]; then
   log "installing: ${MISSING[*]}"
-  apt-get update -qq || die "apt-get update failed"
-  apt-get install -y -qq "${MISSING[@]}" || die "failed installing: ${MISSING[*]}"
+  apt_get update -qq || die "apt-get update failed"
+  apt_get install -y -qq "${MISSING[@]}" || die "failed installing: ${MISSING[*]}"
 fi
 
 # ---- 3. Docker (official repo, not distro) -----------------------------------
@@ -58,8 +73,8 @@ if ! command -v docker >/dev/null 2>&1; then
   echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] \
 https://download.docker.com/linux/ubuntu ${VERSION_CODENAME} stable" \
     > /etc/apt/sources.list.d/docker.list
-  apt-get update -qq || die "apt-get update (docker repo) failed"
-  apt-get install -y -qq docker-ce docker-ce-cli containerd.io \
+  apt_get update -qq || die "apt-get update (docker repo) failed"
+  apt_get install -y -qq docker-ce docker-ce-cli containerd.io \
     docker-buildx-plugin docker-compose-plugin || die "docker install failed"
   systemctl enable --now docker >/dev/null 2>&1 || true
 else
@@ -93,6 +108,10 @@ log "installing shroud package into venv (editable; keeps profiles/ + decoy/ aut
 # Editable so the on-disk checkout (which holds profiles/, decoy/, render/) stays
 # the source of truth — these live at the repo root, outside the importable package.
 "${VENV_DIR}/bin/pip" install --quiet --editable "${INSTALL_DIR}" || die "pip install shroud failed"
+
+# Expose `shroud` globally so `shroud status|verify|show-sub|update` work without
+# the venv path.
+ln -sf "${VENV_DIR}/bin/shroud" /usr/local/bin/shroud 2>/dev/null || true
 
 # ---- 6. hand over to orchestrator -------------------------------------------
 # Everything after a literal `--` is passed straight to `shroud`.

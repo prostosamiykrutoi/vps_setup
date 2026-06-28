@@ -74,20 +74,25 @@ def run_all(ctx: "Context") -> list[Check]:
         ok, detail = _tls_handshake(ip, int(vless.get("port", 443)), sni)
         checks.append(Check("vless-reality:handshake", ok, detail))
 
-    # telemt FakeTLS: handshake with the fake_tls_domain SNI should proceed;
-    # a probe with a bogus SNI must NOT yield a working proxy (reject/real site).
+    # telemt (MTProto FakeTLS). NOTE: a plain TLS client never completes a
+    # handshake against a FakeTLS proxy — the proxy waits for the MTProto-derived
+    # ClientHello, so a generic TLS handshake just hangs. So we DON'T do a
+    # plaintext TLS test (that produced a misleading timeout). Instead:
+    #   * the TCP port must accept connections, and
+    #   * a bogus SNI must be rejected (probe resistance).
     telemt = ctx.profile.protocol("telemt-mtproto")
     if telemt and telemt.get("enabled"):
         port = int(telemt.get("port", 8443))
-        good_sni = telemt.get("fake_tls_domain", "dl.google.com")
-        ok_good, d_good = _tls_handshake(ip, port, good_sni)
-        checks.append(Check("telemt:faketls", ok_good, d_good))
-        # Probe-resistance: bogus SNI should be rejected (handshake fails) when
-        # unknown_sni_action=reject_handshake.
+        checks.append(Check("telemt:port-open", _tcp_open(ip, port),
+                            f"tcp/{port}"))
         ok_bad, _ = _tls_handshake(ip, port, "definitely-not-a-real-sni.invalid")
         resistant = (not ok_bad) if telemt.get("unknown_sni_action") == "reject_handshake" else True
         checks.append(Check("telemt:probe-resistance", resistant,
-                            "probe rejected" if resistant else "probe accepted (weak)"))
+                            "probe rejected" if resistant
+                            else "probe accepted (weak)"))
+        # Capture telemt's own logs so end-to-end Telegram issues are diagnosable
+        # from the next run without extra manual steps.
+        _dump_container_log(ctx, "shroud-telemt")
 
     # hysteria2 is UDP/QUIC — without a client we confirm the container is up and
     # the UDP socket is bound (best-effort).
@@ -101,6 +106,15 @@ def run_all(ctx: "Context") -> list[Check]:
     checks.append(Check("decoy:real-site", decoy_ok))
 
     return checks
+
+
+def _dump_container_log(ctx: "Context", name: str, tail: int = 25) -> None:
+    res = ctx.runner.run(["docker", "logs", "--tail", str(tail), name],
+                         mutating=False, timeout=20)
+    out = (res.stdout or "") + (res.stderr or "")
+    for line in out.splitlines()[-tail:]:
+        if line.strip():
+            ctx.log.info("container.log", c=name, line=line[:300])
 
 
 def _decoy_is_real(ctx: "Context", ip: str) -> bool:

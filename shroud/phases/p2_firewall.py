@@ -87,13 +87,27 @@ class FirewallStep(Step):
     def inputs(self):
         return desired_ports(self.ctx)
 
-    def _path(self) -> Path:
+    def _root(self) -> Path:
         import os
-        return Path(os.environ.get("SHROUD_ROOT", "/")) / RULES_FILE.lstrip("/")
+        return Path(os.environ.get("SHROUD_ROOT", "/"))
+
+    def _path(self) -> Path:
+        return self._root() / RULES_FILE.lstrip("/")
+
+    def _main_conf(self) -> Path:
+        return self._root() / "etc/nftables.conf"
+
+    _INCLUDE = f'include "{RULES_FILE}"'
+
+    def _persisted(self) -> bool:
+        conf = self._main_conf()
+        return conf.exists() and self._INCLUDE in conf.read_text("utf-8")
 
     def check(self) -> bool:
         p = self._path()
         if not (p.exists() and p.read_text("utf-8") == render_ruleset(self.ctx)):
+            return False
+        if not self._persisted():            # must survive reboot
             return False
         res = self.ctx.runner.run(["nft", "list", "table", "inet", "shroud"],
                                   mutating=False)
@@ -110,6 +124,15 @@ class FirewallStep(Step):
         # Replace just our table atomically, then load the file.
         ctx.runner.run(["nft", "delete", "table", "inet", "shroud"])  # ok if absent
         ctx.runner.run(["nft", "-f", str(p)], check=False)
+        # Persist: nftables.service loads /etc/nftables.conf on boot, so make it
+        # include our ruleset (otherwise the firewall is gone after a reboot).
+        conf = self._main_conf()
+        if not self._persisted():
+            conf.parent.mkdir(parents=True, exist_ok=True)
+            existing = conf.read_text("utf-8") if conf.exists() else "#!/usr/sbin/nft -f\n"
+            if not existing.endswith("\n"):
+                existing += "\n"
+            conf.write_text(existing + self._INCLUDE + "\n", "utf-8")
         ctx.runner.run(["systemctl", "enable", "nftables"])
 
     def verify(self) -> bool:
