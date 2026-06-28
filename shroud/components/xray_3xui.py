@@ -17,7 +17,7 @@ from http.cookiejar import CookieJar
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .. import reality, secrets_util
+from .. import paths, reality, secrets_util
 from ..log import register_secret
 from .base import Component
 from . import sni
@@ -127,46 +127,98 @@ class Xray3xuiComponent(Component):
         panel = ctx.profile.panel
         panel_port = int(panel.get("port", 2053))
 
-        # 1. Set panel credentials via the in-container CLI.
-        # NOTE: do NOT set -listenIP 127.0.0.1 here. Inside the container that
-        # would bind the panel to the container's loopback, which Docker's port
-        # publish (DNAT to the container's eth0) can't reach. Loopback-only
-        # exposure (D1) is enforced at the HOST level by publishing the port as
-        # 127.0.0.1:2053:2053 in compose; the panel binds 0.0.0.0 in-container.
+        # 1. Set panel credentials via the in-container CLI so the operator can
+        # log into the UI. NOTE: do NOT set -listenIP 127.0.0.1 here — inside the
+        # container that binds the panel to the container's loopback, which
+        # Docker's port publish (DNAT to the container's eth0) can't reach.
+        # Loopback-only exposure (D1) is enforced at the HOST via publishing the
+        # port as 127.0.0.1:2053:2053; the panel binds 0.0.0.0 in-container.
         ctx.runner.run(
             ["docker", "exec", "shroud-3xui", "x-ui", "setting",
              "-username", self._panel_user, "-password", self._panel_pass,
              "-port", str(panel_port)],
             timeout=60,
         )
-        # Best-effort: pin the web base path to root so the API lives at /login.
-        # Fresh 3x-ui installs generate a RANDOM webBasePath; hitting /login then
-        # returns 403. If the flag is unsupported this call just fails harmlessly
-        # and we fall back to discovering the real base path below.
-        ctx.runner.run(
-            ["docker", "exec", "shroud-3xui", "x-ui", "setting",
-             "-webBasePath", "/"], timeout=60)
-        ctx.runner.run(["docker", "restart", "shroud-3xui"], timeout=60)
-        time.sleep(5)  # let the panel re-read settings and bind before we probe
 
-        # 2. Discover the ACTUAL port + base path the panel ended up with, rather
-        # than assuming. This is what fixes the 403-on-/login failure.
-        port, base = self._read_panel_settings(panel_port)
-        self._panel_base_path = base
-        ctx.log.info("3xui.discovered", port=port, base_path=base or "/")
-        self._wait_panel(port, base)
+        # 2. Create the VLESS-Reality inbound by writing 3x-ui's SQLite DB
+        # directly. The panel's HTTP API guards POST /login with a CSRF/login
+        # flow that hard-returns 403 to scripted requests (verified in CI); the
+        # DB is the deterministic, version-robust path. We adapt to the real
+        # table columns via PRAGMA so a schema change doesn't break us.
+        self._provision_inbound_via_db()
 
-        api = _PanelAPI(f"http://127.0.0.1:{port}{base}", ctx)
-        if not api.login(self._panel_user, self._panel_pass):
-            ctx.log.warn("3xui.login_failed", base_path=base or "/")
+    def _db_path(self):
+        return paths.runtime_dir() / "3xui" / "db" / "x-ui.db"
+
+    def _provision_inbound_via_db(self) -> None:
+        ctx = self.ctx
+        db = self._db_path()
+        for _ in range(20):                       # wait for the panel to create it
+            if db.exists():
+                break
+            time.sleep(1.5)
+        if not db.exists():
+            ctx.log.warn("3xui.db_missing", path=str(db))
             return
-        if api.inbound_exists("shroud-vless-reality"):
+        if self._inbound_in_db(db):
             ctx.log.info("3xui.inbound_exists")
             return
-        ok = api.add_inbound(self._build_inbound())
-        ctx.log.info("3xui.inbound_added", ok=ok)
-        if ok:
-            time.sleep(3)  # let xray restart and start listening on :443
+        # Stop the panel to write its DB safely, insert, then start so xray
+        # regenerates its config with the new inbound.
+        ctx.runner.run(["docker", "stop", "shroud-3xui"], timeout=60)
+        inserted = self._insert_inbound_db(db)
+        ctx.runner.run(["docker", "start", "shroud-3xui"], timeout=60)
+        time.sleep(5)
+        ctx.log.info("3xui.inbound_db", inserted=inserted)
+
+    def _inbound_in_db(self, db) -> bool:
+        import sqlite3
+        try:
+            con = sqlite3.connect(str(db))
+            try:
+                cur = con.execute(
+                    "SELECT COUNT(*) FROM inbounds WHERE remark=?",
+                    ("shroud-vless-reality",))
+                return cur.fetchone()[0] > 0
+            finally:
+                con.close()
+        except Exception:
+            return False
+
+    def _insert_inbound_db(self, db) -> bool:
+        import sqlite3
+        inbound = self._build_inbound()
+        row = {
+            "user_id": 1, "up": 0, "down": 0, "total": 0,
+            "remark": inbound["remark"], "enable": 1, "expiry_time": 0,
+            "listen": "", "port": inbound["port"], "protocol": "vless",
+            "settings": inbound["settings"],
+            "stream_settings": inbound["streamSettings"],
+            "tag": f"inbound-{inbound['port']}",
+            "sniffing": inbound["sniffing"],
+            "allocate": json.dumps(
+                {"strategy": "always", "refresh": 5, "concurrency": 3}),
+        }
+        try:
+            con = sqlite3.connect(str(db))
+            try:
+                cols = {r[1] for r in con.execute("PRAGMA table_info(inbounds)")}
+                if not cols:
+                    self.ctx.log.warn("3xui.db_no_table")
+                    return False
+                use = {k: v for k, v in row.items() if k in cols}
+                fields = ", ".join(use)
+                placeholders = ", ".join("?" * len(use))
+                con.execute(
+                    f"INSERT INTO inbounds ({fields}) VALUES ({placeholders})",
+                    list(use.values()))
+                con.commit()
+                return True
+            finally:
+                con.close()
+        except Exception as exc:
+            self.ctx.log.warn("3xui.db_insert_error", error=str(exc))
+            return False
 
     def _read_panel_settings(self, default_port: int) -> tuple[int, str]:
         """Parse `x-ui setting -show` for the real port + web base path.

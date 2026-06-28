@@ -71,20 +71,28 @@ def main() -> int:
         if not up:
             failures.append(f"{name} not running")
 
-    # 2. Inbound actually created via the panel API?
-    panel_port = int(ctx.profile.panel.get("port", 2053))
-    api = _PanelAPI(f"http://127.0.0.1:{panel_port}", ctx)
-    user = ctx.credentials.get("panel_user")
-    pwd = ctx.credentials.get("panel_pass")
-    if user and pwd and api.login(user, pwd):
-        if api.inbound_exists("shroud-vless-reality"):
-            print("[ci] VLESS inbound present via API: OK")
-        else:
-            failures.append("VLESS inbound missing via API")
-            print("[ci] VLESS inbound MISSING via API")
+    # 2. Inbound actually created? Verify against 3x-ui's SQLite DB (the panel
+    # HTTP API guards login with CSRF and 403s scripted requests, so the DB is
+    # the source of truth).
+    import sqlite3
+    db = paths.runtime_dir() / "3xui" / "db" / "x-ui.db"
+    inbound_ok = False
+    if db.exists():
+        try:
+            con = sqlite3.connect(str(db))
+            try:
+                inbound_ok = con.execute(
+                    "SELECT COUNT(*) FROM inbounds WHERE remark=?",
+                    ("shroud-vless-reality",)).fetchone()[0] > 0
+            finally:
+                con.close()
+        except Exception as exc:
+            print(f"[ci] DB check error: {exc}")
+    if inbound_ok:
+        print("[ci] VLESS inbound present in 3x-ui DB: OK")
     else:
-        failures.append("panel API login failed")
-        print("[ci] panel API login FAILED")
+        failures.append("VLESS inbound missing in DB")
+        print("[ci] VLESS inbound MISSING in DB")
 
     # 3. Self-tests (informational — printed, not fatal).
     checks = p6_verify.run(ctx)
