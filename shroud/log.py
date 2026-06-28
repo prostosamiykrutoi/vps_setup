@@ -80,6 +80,9 @@ class Logger:
                       "debug": "90"}.get(level, "0")
             stream.write(f"\033[{colour}m[{level}]\033[0m {event} "
                          f"{json.dumps({k: v for k, v in record.items() if k not in ('ts', 'level', 'event')}, ensure_ascii=False)}\n")
+            # Flush so diagnostics appear in real time (and aren't lost/reordered
+            # in a non-TTY capture like CI on a fast run).
+            stream.flush()
 
     def debug(self, event: str, **f: Any) -> None: self._emit("debug", event, **f)
     def info(self, event: str, **f: Any) -> None: self._emit("info", event, **f)
