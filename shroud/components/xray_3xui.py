@@ -8,6 +8,7 @@ VLESS inbound itself listens on the public 443.
 from __future__ import annotations
 
 import json
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -23,6 +24,9 @@ from . import sni
 
 if TYPE_CHECKING:
     from ..context import Context
+
+_UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 
 
 class Xray3xuiComponent(Component):
@@ -135,25 +139,63 @@ class Xray3xuiComponent(Component):
              "-port", str(panel_port)],
             timeout=60,
         )
+        # Best-effort: pin the web base path to root so the API lives at /login.
+        # Fresh 3x-ui installs generate a RANDOM webBasePath; hitting /login then
+        # returns 403. If the flag is unsupported this call just fails harmlessly
+        # and we fall back to discovering the real base path below.
+        ctx.runner.run(
+            ["docker", "exec", "shroud-3xui", "x-ui", "setting",
+             "-webBasePath", "/"], timeout=60)
         ctx.runner.run(["docker", "restart", "shroud-3xui"], timeout=60)
-        self._wait_panel(panel_port)
 
-        api = _PanelAPI(f"http://127.0.0.1:{panel_port}", ctx)
+        # 2. Discover the ACTUAL port + base path the panel ended up with, rather
+        # than assuming. This is what fixes the 403-on-/login failure.
+        port, base = self._read_panel_settings(panel_port)
+        self._panel_base_path = base
+        self._wait_panel(port, base)
+
+        api = _PanelAPI(f"http://127.0.0.1:{port}{base}", ctx)
         if not api.login(self._panel_user, self._panel_pass):
-            ctx.log.warn("3xui.login_failed")
+            ctx.log.warn("3xui.login_failed", base_path=base or "/")
             return
         if api.inbound_exists("shroud-vless-reality"):
             ctx.log.info("3xui.inbound_exists")
             return
         ok = api.add_inbound(self._build_inbound())
         ctx.log.info("3xui.inbound_added", ok=ok)
+        if ok:
+            time.sleep(3)  # let xray restart and start listening on :443
 
-    def _wait_panel(self, port: int, attempts: int = 20) -> None:
+    def _read_panel_settings(self, default_port: int) -> tuple[int, str]:
+        """Parse `x-ui setting -show` for the real port + web base path.
+
+        Returns (port, base_suffix) where base_suffix is '' for root or '/xyz'.
+        """
+        res = self.ctx.runner.run(
+            ["docker", "exec", "shroud-3xui", "x-ui", "setting", "-show"],
+            mutating=False, timeout=30)
+        out = res.stdout if res.ok else ""
+        port = default_port
+        m = re.search(r"(?im)^\s*port\s*[:=]\s*(\d+)", out)
+        if m:
+            port = int(m.group(1))
+        base = ""
+        b = re.search(r"(?im)base\s*path\s*[:=]\s*(\S*)", out)
+        if b:
+            raw = b.group(1).strip()
+            if raw and raw != "/":
+                base = "/" + raw.strip("/")
+        return port, base
+
+    def _wait_panel(self, port: int, base: str = "", attempts: int = 25) -> None:
+        # Server is "up" as soon as it answers with ANY HTTP status (a base-path
+        # panel returns 404 on '/', which still means it's listening).
+        url = f"http://127.0.0.1:{port}{base}/"
         for _ in range(attempts):
             res = self.ctx.runner.run(
-                ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
-                 f"http://127.0.0.1:{port}/"], mutating=False, timeout=10)
-            if res.stdout.strip() in ("200", "302", "307"):
+                ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", url],
+                mutating=False, timeout=10)
+            if res.stdout.strip() not in ("", "000"):
                 return
             time.sleep(1.5)
 
@@ -227,6 +269,7 @@ class _PanelAPI:
         else:
             body = urllib.parse.urlencode(data).encode()
             headers = {"Content-Type": "application/x-www-form-urlencoded"}
+        headers["User-Agent"] = _UA
         req = urllib.request.Request(url, data=body, headers=headers, method="POST")
         try:
             with self.opener.open(req, timeout=20) as resp:
@@ -241,7 +284,7 @@ class _PanelAPI:
 
     def inbound_exists(self, remark: str) -> bool:
         url = self.base + "/panel/api/inbounds/list"
-        req = urllib.request.Request(url, method="GET")
+        req = urllib.request.Request(url, method="GET", headers={"User-Agent": _UA})
         try:
             with self.opener.open(req, timeout=20) as resp:
                 data = json.loads(resp.read().decode() or "{}")

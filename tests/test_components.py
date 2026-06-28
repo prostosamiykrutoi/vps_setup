@@ -68,3 +68,26 @@ def test_registry_builds_enabled(ctx):
     comps = registry.build_enabled(ctx)
     types = {c.type for c in comps}
     assert {"vless", "hysteria2", "telemt"}.issubset(types)
+
+
+def test_panel_settings_parse_random_base_path(ctx, monkeypatch):
+    # The CI failure was a 403 because 3x-ui generated a random webBasePath and
+    # we hit /login. _read_panel_settings must recover the real port + base path.
+    from shroud.proc import Result
+    c = Xray3xuiComponent(ctx, _proto(ctx, "vless-reality-xhttp"))
+    sample = "username: adm_x\nport: 2053\nwebBasePath: /Ab9xQ/\n"
+    monkeypatch.setattr(ctx.runner, "run",
+                        lambda *a, **k: Result(0, sample, ""))
+    port, base = c._read_panel_settings(2053)
+    assert port == 2053
+    assert base == "/Ab9xQ"   # normalised: leading slash, no trailing
+
+
+def test_panel_settings_parse_root_base_path(ctx, monkeypatch):
+    from shroud.proc import Result
+    c = Xray3xuiComponent(ctx, _proto(ctx, "vless-reality-xhttp"))
+    monkeypatch.setattr(ctx.runner, "run",
+                        lambda *a, **k: Result(0, "port: 8443\nwebBasePath: /\n", ""))
+    port, base = c._read_panel_settings(2053)
+    assert port == 8443
+    assert base == ""         # root => no suffix
