@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from shroud.components.telemt import TelemtComponent
 from shroud.components.hysteria2 import Hysteria2Component
 from shroud.components.xray_3xui import Xray3xuiComponent
