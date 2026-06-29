@@ -99,8 +99,8 @@ class Fail2banStep(Step):
     def apply(self) -> None:
         ctx = self.ctx
         if not ctx.runner.have("fail2ban-server"):
-            ctx.runner.run(["apt-get", "install", "-y", "-qq", "fail2ban"],
-                           timeout=300)
+            ctx.runner.run(["apt-get", "-o", "DPkg::Lock::Timeout=600",
+                            "install", "-y", "-qq", "fail2ban"], timeout=600)
         p = self._jail()
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(self._desired(), "utf-8")

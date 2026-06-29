@@ -1,31 +1,439 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Northwind Analytics — Status</title>
-  <style>
-    body { font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
-           margin: 0; background: #f7f8fa; color: #222; }
-    header { background: #1f2937; color: #fff; padding: 18px 24px; }
-    main { max-width: 720px; margin: 40px auto; padding: 0 20px; }
-    .card { background: #fff; border: 1px solid #e5e7eb; border-radius: 10px;
-            padding: 24px; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
-    .ok { color: #15803d; font-weight: 600; }
-    footer { color: #6b7280; font-size: 13px; text-align: center; margin: 32px 0; }
-  </style>
+    <meta charset="utf-8">
+    <title>Вход - Nextcloud</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0">
+    <meta name="robots" content="noindex, nofollow">
+    <!-- Реальный favicon Nextcloud -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 60'%3E%3Ccircle cx='22' cy='30' r='14' fill='none' stroke='%230082c9' stroke-width='5'/%3E%3Ccircle cx='50' cy='30' r='14' fill='none' stroke='%230082c9' stroke-width='5'/%3E%3Ccircle cx='78' cy='30' r='14' fill='none' stroke='%230082c9' stroke-width='5'/%3E%3C/svg%3E">
+    <style>
+        :root {
+            --color-primary: #00639a;
+            --color-primary-hover: #0078b9;
+            --color-main-text: #333;
+            --color-main-background: #fff;
+            --color-main-background-translucent: rgba(255, 255, 255, 0.95);
+            --color-background-dark: #1d1f20;
+            --color-border: #ededed;
+            --color-border-dark: #dbdbdb;
+            --color-error: #e9322d;
+            --color-box-shadow: rgba(0, 0, 0, 0.1);
+            --color-box-shadow-rgba: rgba(0, 0, 0, 0.15);
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Noto Sans', 'Segoe UI', Roboto, Oxygen-Sans, Ubuntu, Cantarell, 'Helvetica Neue', sans-serif;
+            background-color: var(--color-main-background);
+            color: var(--color-main-text);
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+        }
+
+        .wrapper {
+            flex: 1 0 auto;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            width: 100%;
+            padding: 20px;
+        }
+
+        .vbox {
+            width: 100%;
+            max-width: 380px;
+            background: var(--color-main-background-translucent);
+            padding: 40px 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px var(--color-box-shadow), 0 10px 30px var(--color-box-shadow-rgba);
+            text-align: center;
+        }
+
+        .logo {
+            margin-bottom: 30px;
+            display: flex;
+            justify-content: center;
+        }
+
+        .logo svg {
+            width: 120px;
+            height: auto;
+        }
+
+        h2 {
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 25px;
+            text-align: center;
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+            text-align: left;
+        }
+
+        .form-group label {
+            display: block;
+            font-size: 14px;
+            margin-bottom: 5px;
+            color: #555;
+        }
+
+        input[type="text"], input[type="password"] {
+            width: 100%;
+            padding: 12px 14px;
+            font-size: 15px;
+            border: 1px solid var(--color-border-dark);
+            border-radius: 4px;
+            outline: none;
+            transition: border-color 0.2s;
+            background: #fff;
+            color: #333;
+        }
+
+        input:focus {
+            border-color: var(--color-primary);
+            box-shadow: 0 0 0 2px rgba(0, 99, 154, 0.2);
+        }
+
+        .login-form {
+            text-align: left;
+        }
+
+        .remember-with-forgot {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin: 15px 0 25px;
+            font-size: 13px;
+        }
+
+        .remember-with-forgot label {
+            display: flex;
+            align-items: center;
+            cursor: pointer;
+            color: #666;
+        }
+
+        .remember-with-forgot input[type="checkbox"] {
+            margin-right: 6px;
+        }
+
+        .remember-with-forgot a {
+            color: var(--color-primary);
+            text-decoration: none;
+        }
+
+        .remember-with-forgot a:hover {
+            text-decoration: underline;
+        }
+
+        .submit-wrapper {
+            text-align: center;
+        }
+
+        button[type="submit"] {
+            background-color: var(--color-primary);
+            color: #fff;
+            border: none;
+            border-radius: 4px;
+            padding: 12px 24px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            width: 100%;
+            transition: background-color 0.2s;
+        }
+
+        button[type="submit"]:hover {
+            background-color: var(--color-primary-hover);
+        }
+
+        button[type="submit"]:disabled {
+            background-color: #a0c4d9;
+            cursor: not-allowed;
+        }
+
+        .error-msg {
+            background-color: #fdf3f2;
+            border: 1px solid #f3d7d5;
+            color: var(--color-error);
+            padding: 12px;
+            border-radius: 4px;
+            font-size: 14px;
+            margin-bottom: 20px;
+            display: none;
+            text-align: left;
+        }
+
+        .error-msg.show {
+            display: block;
+            animation: shake 0.4s;
+        }
+
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-5px); }
+            75% { transform: translateX(5px); }
+        }
+
+        .alternative-logins {
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid var(--color-border);
+            text-align: center;
+        }
+
+        .alternative-logins h3 {
+            font-size: 14px;
+            font-weight: 500;
+            color: #888;
+            margin-bottom: 15px;
+        }
+
+        .alt-login-btn {
+            display: inline-block;
+            padding: 8px 16px;
+            margin: 0 4px;
+            border: 1px solid var(--color-border-dark);
+            border-radius: 4px;
+            background: #fff;
+            color: #444;
+            text-decoration: none;
+            font-size: 13px;
+            transition: background 0.2s, opacity 0.2s;
+            cursor: pointer;
+            position: relative;
+        }
+
+        .alt-login-btn:hover {
+            background: #f7f7f7;
+        }
+
+        .alt-login-btn.loading {
+            pointer-events: none;
+            opacity: 0.7;
+            color: #888;
+            background: #f7f7f7;
+        }
+
+        .alt-login-btn.loading::before {
+            content: "";
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border: 2px solid rgba(0,0,0,0.1);
+            border-top-color: #888;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            vertical-align: middle;
+            margin-right: 6px;
+        }
+
+        .alt-login-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        footer {
+            flex-shrink: 0;
+            padding: 20px;
+            text-align: center;
+            font-size: 12px;
+            color: #666;
+        }
+
+        footer a {
+            color: #666;
+            text-decoration: none;
+            margin: 0 8px;
+            transition: color 0.2s;
+        }
+
+        footer a:hover {
+            color: var(--color-primary);
+            text-decoration: underline;
+        }
+
+        .lang-switcher {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            font-size: 12px;
+        }
+
+        .lang-switcher select {
+            padding: 4px;
+            border: 1px solid var(--color-border-dark);
+            background: #fff;
+            border-radius: 3px;
+        }
+
+        .spinner {
+            display: none;
+            width: 16px;
+            height: 16px;
+            border: 2px solid rgba(255,255,255,0.3);
+            border-top-color: #fff;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            vertical-align: middle;
+            margin-right: 8px;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        button.loading .btn-text { opacity: 0.7; }
+        button.loading .spinner { display: inline-block; }
+    </style>
 </head>
 <body>
-  <header><strong>Northwind Analytics</strong></header>
-  <main>
-    <div class="card">
-      <h1>Service status</h1>
-      <p>All systems <span class="ok">operational</span>.</p>
-      <p>This endpoint serves the Northwind Analytics dashboard. If you reached
-         this page directly, please sign in through your organisation portal.</p>
-      <p>For support, contact your account administrator.</p>
+    <div class="wrapper">
+        <div class="vbox">
+            <div class="logo">
+                <svg viewBox="0 0 100 60" xmlns="http://www.w3.org/2000/svg">
+                    <circle cx="22" cy="30" r="14" fill="none" stroke="#0082c9" stroke-width="5"/>
+                    <circle cx="50" cy="30" r="14" fill="none" stroke="#0082c9" stroke-width="5"/>
+                    <circle cx="78" cy="30" r="14" fill="none" stroke="#0082c9" stroke-width="5"/>
+                </svg>
+            </div>
+
+            <h2>Вход в Nextcloud</h2>
+
+            <div class="error-msg" id="errorMsg" role="alert">
+                <span id="errorText">Неверный логин или пароль. Проверьте введённые данные.</span>
+            </div>
+
+            <form class="login-form" id="loginForm" novalidate>
+                <div class="form-group">
+                    <label for="user">Логин или email</label>
+                    <input type="text" id="user" name="user" placeholder="ivan.petrov@example.com" required autocomplete="username">
+                </div>
+
+                <div class="form-group">
+                    <label for="password">Пароль</label>
+                    <input type="password" id="password" name="password" placeholder="••••••••" required autocomplete="current-password">
+                </div>
+
+                <div class="remember-with-forgot">
+                    <label>
+                        <input type="checkbox" name="remember_login" value="1" checked>
+                        Запомнить меня
+                    </label>
+                    <a href="https://docs.nextcloud.com/server/latest/user_manual/ru/webinterface.html#recuperar-contrasena" target="_blank" rel="noopener noreferrer">Забыли пароль?</a>
+                </div>
+
+                <div class="submit-wrapper">
+                    <button type="submit" id="submitBtn">
+                        <span class="spinner"></span>
+                        <span class="btn-text">Войти</span>
+                    </button>
+                </div>
+            </form>
+
+            <div class="alternative-logins">
+                <h3>Войти через:</h3>
+                <a href="javascript:void(0)" class="alt-login-btn" data-provider="Google">Google</a>
+                <a href="javascript:void(0)" class="alt-login-btn" data-provider="GitHub">GitHub</a>
+                <a href="javascript:void(0)" class="alt-login-btn" data-provider="LDAP / Active Directory">LDAP / Active Directory</a>
+            </div>
+        </div>
     </div>
-    <footer>© Northwind Analytics. All rights reserved.</footer>
-  </main>
+
+    <footer>
+        <a href="https://nextcloud.com" target="_blank" rel="noopener noreferrer">Nextcloud</a>
+        <a href="https://apps.nextcloud.com" target="_blank" rel="noopener noreferrer">Приложения</a>
+        <a href="https://docs.nextcloud.com/server/latest/admin_manual/" target="_blank" rel="noopener noreferrer">Помощь</a>
+        <a href="https://nextcloud.com/privacy/" target="_blank" rel="noopener noreferrer">Политика конфиденциальности</a>
+        <a href="https://nextcloud.com/legal/" target="_blank" rel="noopener noreferrer">Условия использования</a>
+        <br><br>
+        Nextcloud 29.0.3 — безопасная платформа для облачных сервисов.
+    </footer>
+
+    <div class="lang-switcher">
+        <select>
+            <option>Русский</option>
+            <option>English</option>
+            <option>Deutsch</option>
+        </select>
+    </div>
+
+<script>
+const form = document.getElementById('loginForm');
+const submitBtn = document.getElementById('submitBtn');
+const errorMsg = document.getElementById('errorMsg');
+const errorText = document.getElementById('errorText');
+
+const errors = [
+    "Неверный логин или пароль. Проверьте введённые данные.",
+    "Учётная запись не найдена на указанном сервере. Обратитесь к администратору.",
+    "Слишком много неудачных попыток входа. Повторите через 5 минут.",
+    "Не удалось проверить учётные данные. Проверьте подключение к сети."
+];
+
+let attempt = 0;
+
+form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    errorMsg.classList.remove('show');
+
+    const user = document.getElementById('user').value.trim();
+    const pass = document.getElementById('password').value;
+
+    if (!user || !pass) {
+        errorText.textContent = "Пожалуйста, заполните все поля.";
+        errorMsg.classList.add('show');
+        return;
+    }
+
+    submitBtn.classList.add('loading');
+    submitBtn.disabled = true;
+
+    // Имитация запроса к серверу Nextcloud
+    setTimeout(() => {
+        submitBtn.classList.remove('loading');
+        submitBtn.disabled = false;
+
+        errorText.textContent = attempt === 0 ? errors[0] : errors[Math.floor(Math.random() * errors.length)];
+        errorMsg.classList.add('show');
+        attempt++;
+    }, 1200);
+});
+
+// Обработка кликов по альтернативным вариантам входа
+document.querySelectorAll('.alt-login-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        const provider = btn.getAttribute('data-provider');
+
+        // Сброс состояния всех кнопок
+        document.querySelectorAll('.alt-login-btn').forEach(b => {
+            if (b !== btn) b.style.opacity = '0.5';
+        });
+
+        // Имитация процесса авторизации
+        btn.classList.add('loading');
+        const originalText = btn.textContent;
+        btn.textContent = 'Подключение...';
+
+        setTimeout(() => {
+            btn.classList.remove('loading');
+            btn.textContent = originalText;
+            document.querySelectorAll('.alt-login-btn').forEach(b => b.style.opacity = '1');
+
+            // Вывод ошибки авторизации
+            errorText.textContent = `Не удалось подключиться к серверу авторизации ${provider}. Проверьте подключение к интернету.`;
+            errorMsg.classList.add('show');
+        }, 1500);
+    });
+});
+</script>
 </body>
 </html>

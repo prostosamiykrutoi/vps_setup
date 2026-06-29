@@ -124,8 +124,8 @@ class FirewallStep(Step):
     def apply(self) -> None:
         ctx = self.ctx
         if not ctx.runner.have("nft"):
-            ctx.runner.run(["apt-get", "install", "-y", "-qq", "nftables"],
-                           timeout=300)
+            ctx.runner.run(["apt-get", "-o", "DPkg::Lock::Timeout=600",
+                            "install", "-y", "-qq", "nftables"], timeout=600)
         p = self._path()
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(render_ruleset(ctx), "utf-8")

@@ -40,20 +40,26 @@ ensure_pkg() {
     dpkg -s "$p" >/dev/null 2>&1 || MISSING+=("$p")
   done
 }
-# On a freshly-booted VPS, cloud-init / unattended-upgrades often hold the apt
-# lock. Wait for it (up to ~3 min) instead of failing the whole install.
-wait_for_apt() {
-  local tries=0
-  while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 \
-     || fuser /var/lib/apt/lists/lock >/dev/null 2>&1 \
-     || fuser /var/lib/dpkg/lock >/dev/null 2>&1; do
-    tries=$((tries + 1))
-    [ "$tries" -gt 36 ] && { log "WARNING: apt still locked after ~3min; proceeding"; break; }
-    log "apt is locked by another process; waiting... (${tries}/36)"
-    sleep 5
-  done
+# A freshly-booted VPS often has cloud-init / unattended-upgrades holding the apt
+# lock for several minutes (first-boot kernel/security upgrades). Two-pronged:
+#  1. wait (and log progress) while the lock is held, up to ~15 min, and
+#  2. pass DPkg::Lock::Timeout so apt ITSELF blocks on the lock rather than
+#     failing immediately — this also covers the race where the lock is re-taken
+#     between our check and the apt call.
+APT_OPTS="-o DPkg::Lock::Timeout=900 -o Dpkg::Use-Pty=0"
+apt_locked() {
+  fuser /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/lib/apt/lists/lock \
+    >/dev/null 2>&1
 }
-apt_get() { wait_for_apt; DEBIAN_FRONTEND=noninteractive apt-get "$@"; }
+apt_get() {
+  local waited=0
+  while apt_locked; do
+    [ "$waited" -ge 900 ] && { log "apt still locked after ~15min; relying on apt's own lock-timeout"; break; }
+    [ $((waited % 30)) -eq 0 ] && log "apt is busy (fresh-boot upgrades?); waiting up to 15min... (${waited}s)"
+    sleep 5; waited=$((waited + 5))
+  done
+  DEBIAN_FRONTEND=noninteractive apt-get $APT_OPTS "$@"
+}
 
 MISSING=()
 ensure_pkg python3 python3-venv python3-pip git curl jq openssl ca-certificates
