@@ -151,35 +151,20 @@ class Xray3xuiComponent(Component):
         self._wait_panel(panel_port, "")
         time.sleep(2)
 
-        # 2. NOW set panel credentials (after init they persist). Do NOT set
-        # -listenIP 127.0.0.1 — inside the container that binds the panel to the
-        # container's loopback, which Docker's port publish (DNAT to eth0) can't
-        # reach. Loopback-only exposure (D1) is enforced at the HOST by
-        # publishing 127.0.0.1:2053:2053; the panel binds 0.0.0.0 in-container.
-        ctx.runner.run(
-            ["docker", "exec", "shroud-3xui", "x-ui", "setting",
-             "-username", self._panel_user, "-password", self._panel_pass,
-             "-port", str(panel_port)],
-            timeout=60,
-        )
-        # Defensive: clear any 2FA the fresh panel may have toggled on, so login
-        # with just user+password works (best-effort; flag may be absent).
-        ctx.runner.run(
-            ["docker", "exec", "shroud-3xui", "x-ui", "setting",
-             "-resetTwoFactor", "true"], timeout=30)
-
-        # 3. Create the VLESS-Reality inbound by writing 3x-ui's SQLite DB
-        # directly. The panel's HTTP API guards POST /login with a CSRF/login
-        # flow that hard-returns 403 to scripted requests (verified in CI); the
-        # DB is the deterministic, version-robust path. We adapt to the real
-        # table columns via PRAGMA so a schema change doesn't break us. The
-        # stop/start also reloads the panel so the new credentials take effect.
-        self._provision_inbound_via_db()
+        # 2. Set credentials AND create the inbound by writing 3x-ui's SQLite DB
+        # directly (both done with the container stopped, then restart).
+        # IMPORTANT (learned on a real VPS): this image has NO `x-ui setting`
+        # flag command — credential change is only the interactive menu option
+        # "7. Reset Username & Password". So `x-ui setting -username ...` was a
+        # silent no-op and the panel kept its default `admin` user. We instead
+        # bcrypt the password and write the users + inbounds tables directly,
+        # the same deterministic path we already use for the inbound.
+        self._provision_db()
 
     def _db_path(self):
         return paths.runtime_dir() / "3xui" / "db" / "x-ui.db"
 
-    def _provision_inbound_via_db(self) -> None:
+    def _provision_db(self) -> None:
         ctx = self.ctx
         db = self._db_path()
         for _ in range(20):                       # wait for the panel to create it
@@ -190,14 +175,57 @@ class Xray3xuiComponent(Component):
             ctx.log.warn("3xui.db_missing", path=str(db))
             return
         already = self._inbound_in_db(db)
-        # Stop the panel to write its DB safely, insert if missing, then start so
-        # xray regenerates its config with the inbound AND the panel reloads the
-        # credentials set just before this.
+        # Stop the panel to write its DB safely (creds + inbound), then start so
+        # the panel picks up the new login and xray regenerates its config.
         ctx.runner.run(["docker", "stop", "shroud-3xui"], timeout=60)
+        creds_ok = self._set_panel_creds_db(db)
         inserted = False if already else self._insert_inbound_db(db)
         ctx.runner.run(["docker", "start", "shroud-3xui"], timeout=60)
         time.sleep(5)
-        ctx.log.info("3xui.inbound_db", inserted=inserted, already=already)
+        ctx.log.info("3xui.provisioned", creds_set=creds_ok,
+                     inbound_inserted=inserted, already=already)
+
+    def _set_panel_creds_db(self, db) -> bool:
+        """Set the panel admin username/password by writing the users table.
+
+        3x-ui stores the password as bcrypt ($2a$). We generate a matching
+        $2a$ hash and UPDATE the (single) admin row — the only reliable
+        non-interactive path in this image.
+        """
+        import sqlite3
+        try:
+            import bcrypt
+        except Exception:
+            self.ctx.log.warn("3xui.bcrypt_missing",
+                              hint="pip install bcrypt; panel keeps default admin")
+            return False
+        try:
+            hashed = bcrypt.hashpw(
+                self._panel_pass.encode(),
+                bcrypt.gensalt(rounds=10, prefix=b"2a")).decode()
+            con = sqlite3.connect(str(db))
+            try:
+                cols = {r[1] for r in con.execute("PRAGMA table_info(users)")}
+                if not cols:
+                    return False
+                count = con.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+                if count == 0:
+                    con.execute(
+                        "INSERT INTO users (username, password) VALUES (?, ?)",
+                        (self._panel_user, hashed))
+                else:
+                    con.execute(
+                        "UPDATE users SET username=?, password=? "
+                        "WHERE id=(SELECT MIN(id) FROM users)",
+                        (self._panel_user, hashed))
+                con.commit()
+                self.ctx.log.info("3xui.creds_set", user=self._panel_user)
+                return True
+            finally:
+                con.close()
+        except Exception as exc:
+            self.ctx.log.warn("3xui.creds_error", error=str(exc))
+            return False
 
     def _inbound_in_db(self, db) -> bool:
         import sqlite3

@@ -70,6 +70,33 @@ def test_registry_builds_enabled(ctx):
     assert {"vless", "hysteria2", "telemt"}.issubset(types)
 
 
+def test_panel_creds_written_as_bcrypt(ctx, monkeypatch, tmp_path):
+    # Real-VPS bug: creds were set via a non-existent `x-ui setting` CLI, so the
+    # panel kept its default admin. Now we bcrypt-write the users table directly.
+    bcrypt = pytest.importorskip("bcrypt")
+    import sqlite3
+    monkeypatch.setattr(reality, "generate_keypair", lambda c: ("PRIV", "PUB"))
+    c = Xray3xuiComponent(ctx, _proto(ctx, "vless-reality-xhttp"))
+    c.prepare_secrets()
+
+    db = tmp_path / "x-ui.db"
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, "
+                "password TEXT, login_epoch INTEGER)")
+    con.execute("INSERT INTO users (username,password,login_epoch) "
+                "VALUES ('admin','$2a$10$old',0)")
+    con.commit(); con.close()
+
+    assert c._set_panel_creds_db(db) is True
+
+    con = sqlite3.connect(db)
+    user, pwd_hash = con.execute("SELECT username,password FROM users").fetchone()
+    con.close()
+    assert user == c._panel_user                       # our username, not 'admin'
+    assert pwd_hash.startswith("$2a$")                 # 3x-ui-compatible bcrypt
+    assert bcrypt.checkpw(c._panel_pass.encode(), pwd_hash.encode())
+
+
 def test_sni_validator_rejects_junk():
     from shroud.components import sni
     # The real-VPS bug: "TLS 1.3" was accepted as a donor SNI. It must not be.
